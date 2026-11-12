@@ -1,6 +1,7 @@
 import subprocess
 import yaml
 import tempfile
+import shutil
 from pathlib import Path
 
 def cluster_exists(cluster_name: str) -> bool:
@@ -14,6 +15,25 @@ def cluster_exists(cluster_name: str) -> bool:
     clusters = result.stdout.splitlines()
 
     return cluster_name in clusters
+
+def check_docker():
+    if shutil.which("docker") is None:
+        raise RuntimeError("Docker is not installed.")
+
+    result = subprocess.run(
+        ["docker", "info"],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Docker daemon is unavailable or permission denied."
+        )
+
+def check_kind():
+    if shutil.which("kind") is None:
+        raise RuntimeError("kind is not installed.")
 
 def generate_kind_config(workers: int):
     if workers < 0:
@@ -33,6 +53,9 @@ def generate_kind_config(workers: int):
     return yaml.safe_dump(config, sort_keys=False)
 
 def create_local_cluster(cluster_name: str, workers: int):
+    
+    check_docker()
+    check_kind()
     print(f"Requested worker nodes: {workers}")
 
     if cluster_exists(cluster_name):

@@ -1,3 +1,5 @@
+import subprocess
+
 from typer.testing import CliRunner
 from kubeforge.cli import app
 
@@ -120,3 +122,88 @@ def test_down_confirmed(monkeypatch):
 
     assert result.exit_code == 0
     assert calls == [("local", "dev-cluster")]
+
+def test_up_docker_error(tmp_path, monkeypatch):
+    config_file = tmp_path / "kubeforge.yaml"
+
+    config_file.write_text("""
+cluster:
+  name: test-cluster
+  provider: local
+  workers: 2
+""")
+
+    monkeypatch.chdir(tmp_path)
+
+    def fake_create_cluster(provider, name, workers):
+        raise RuntimeError("Docker daemon is unavailable.")
+
+    monkeypatch.setattr(
+        "kubeforge.cli.create_cluster",
+        fake_create_cluster
+    )
+
+    result = runner.invoke(app, ["up"])
+
+    assert result.exit_code == 1
+    assert "Docker daemon is unavailable." in result.output
+    assert "Traceback" not in result.output
+
+def test_up_kind_error(tmp_path, monkeypatch):
+    config_file = tmp_path / "kubeforge.yaml"
+
+    config_file.write_text("""
+cluster:
+  name: test-cluster
+  provider: local
+  workers: 2
+""")
+
+    monkeypatch.chdir(tmp_path)
+
+    def fake_create_cluster(provider, name, workers):
+        raise subprocess.CalledProcessError(
+            1,
+            ["kind", "create", "cluster"]
+        )
+
+    monkeypatch.setattr(
+        "kubeforge.cli.create_cluster",
+        fake_create_cluster
+    )
+
+    result = runner.invoke(app, ["up"])
+
+    assert result.exit_code == 1
+    assert "Command failed with exit code 1" in result.output
+    assert "Traceback" not in result.output
+
+def test_kind_not_installed(tmp_path, monkeypatch):
+    config_file = tmp_path / "kubeforge.yaml"
+
+    config_file.write_text("""
+cluster:
+  name: test-cluster
+  provider: local
+  workers: 2
+""")
+
+    monkeypatch.chdir(tmp_path)
+
+    def fake_create_cluster(provider, name, workers):
+        raise FileNotFoundError(
+            2,
+            "No such file or directory",
+            "kind"
+        )
+
+    monkeypatch.setattr(
+        "kubeforge.cli.create_cluster",
+        fake_create_cluster
+    )
+
+    result = runner.invoke(app, ["up"])
+
+    assert result.exit_code == 1
+    assert "Required executable not found: kind" in result.output
+    assert "Traceback" not in result.output

@@ -1,8 +1,12 @@
 import yaml
 import pytest
 
-from kubeforge.providers.local import generate_kind_config
-
+from subprocess import CompletedProcess
+from kubeforge.providers.local import (
+    generate_kind_config,
+    check_docker,
+    check_kind,
+)
 
 def test_generate_kind_config():
     config_yaml = generate_kind_config(2)
@@ -29,3 +33,54 @@ def test_worker_count(workers, expected_nodes):
 def test_negative_workers():
     with pytest.raises(ValueError):
         generate_kind_config(-1)
+
+def test_docker_not_installed(monkeypatch):
+    monkeypatch.setattr(
+        "kubeforge.providers.local.shutil.which",
+        lambda name: None
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Docker is not installed"
+    ):
+        check_docker()
+
+def test_docker_daemon_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        "kubeforge.providers.local.shutil.which",
+        lambda name: "/usr/bin/docker"
+    )
+
+    def fake_run(command, **kwargs):
+        assert command == ["docker", "info"]
+
+        return CompletedProcess(
+            command,
+            returncode=1,
+            stdout="",
+            stderr="Cannot connect to Docker daemon"
+        )
+
+    monkeypatch.setattr(
+        "kubeforge.providers.local.subprocess.run",
+        fake_run
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Docker daemon is unavailable"
+    ):
+        check_docker()
+
+def test_kind_not_installed(monkeypatch):
+    monkeypatch.setattr(
+        "kubeforge.providers.local.shutil.which",
+        lambda name: None
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="kind is not installed"
+    ):
+        check_kind()
