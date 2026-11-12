@@ -1,8 +1,10 @@
 import typer
+import yaml
 from kubeforge.core.manager import create_cluster
 from kubeforge.core.manager import delete_cluster
 from kubeforge.core.manager import get_cluster_status
 from kubeforge.core.config import load_config
+from pydantic import ValidationError
 
 app = typer.Typer()
 
@@ -12,8 +14,22 @@ def status(provider: str = "local", name: str = "kubeforge"):
 
 @app.command()
 def up(provider: str | None = None, name: str | None = None):
-    config = load_config()
+    try:
+        config = load_config()
+    except ValidationError as error:
+        typer.secho(
+            "Error: Invalid KubeForge configuration",
+            fg=typer.colors.RED
+        )
 
+        for issue in error.errors():
+            field = ".".join(str(part) for part in issue["loc"])
+            typer.echo(f"{field}: {issue['msg']}")
+
+        raise typer.Exit(code=1) from None
+    except (ValueError, OSError, yaml.YAMLError) as error:
+        typer.secho(f"Configuration error: {error}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from None
     cluster = config["cluster"]
 
     provider = provider or cluster["provider"]
