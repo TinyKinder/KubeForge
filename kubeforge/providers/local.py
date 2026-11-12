@@ -12,8 +12,7 @@ def cluster_exists(cluster_name: str) -> bool:
 
     return cluster_name in clusters
 
-def create_local_cluster():
-    cluster_name = "kubeforge"
+def create_local_cluster(cluster_name: str):
 
     if cluster_exists(cluster_name):
         print(f"Cluster '{cluster_name}' already exists.")
@@ -28,11 +27,11 @@ def create_local_cluster():
 
     print("Cluster created successfully!")
 
-def get_local_cluster_status():
+def get_local_cluster_status(cluster_name: str):
     result = subprocess.run(
         [
             "kubectl",
-            "--context", "kind-kubeforge",
+            "--context", f"kind-{cluster_name}", 
             "get", "nodes"
         ],
         capture_output=True,
@@ -45,8 +44,7 @@ def get_local_cluster_status():
         print("Cannot connect to the Kubernetes cluster.")
         print(result.stderr)
 
-def delete_local_cluster():
-    cluster_name = "kubeforge"
+def delete_local_cluster(cluster_name: str):
 
     if not cluster_exists(cluster_name):
         print(f"Cluster '{cluster_name}' does not exist.")
