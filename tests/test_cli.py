@@ -207,3 +207,113 @@ cluster:
     assert result.exit_code == 1
     assert "Required executable not found: kind" in result.output
     assert "Traceback" not in result.output
+
+def test_status_uses_yaml_config(tmp_path, monkeypatch):
+    config_file = tmp_path / "kubeforge.yaml"
+
+    config_file.write_text("""
+cluster:
+  name: test-cluster
+  provider: local
+  workers: 2
+""")
+
+    monkeypatch.chdir(tmp_path)
+
+    calls = []
+
+    def fake_get_cluster_status(provider, name):
+        calls.append((provider, name))
+
+    monkeypatch.setattr(
+        "kubeforge.cli.get_cluster_status",
+        fake_get_cluster_status
+    )
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert calls == [("local", "test-cluster")]
+
+def test_down_uses_yaml_config(tmp_path, monkeypatch):
+    config_file = tmp_path / "kubeforge.yaml"
+
+    config_file.write_text("""
+cluster:
+  name: test-cluster
+  provider: local
+  workers: 2
+""")
+
+    monkeypatch.chdir(tmp_path)
+
+    calls = []
+
+    def fake_delete_cluster(provider, name):
+        calls.append((provider, name))
+
+    monkeypatch.setattr(
+        "kubeforge.cli.delete_cluster",
+        fake_delete_cluster
+    )
+
+    result = runner.invoke(
+        app,
+        ["down"],
+        input="y\n"
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("local", "test-cluster")]
+    assert "test-cluster" in result.output
+
+def test_status_invalid_config(tmp_path, monkeypatch):
+    config_file = tmp_path / "kubeforge.yaml"
+
+    config_file.write_text("""
+cluster:
+  name: test-cluster
+  provider: local
+  workers: -1
+""")
+
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 1
+    assert "Invalid KubeForge configuration" in result.output
+
+def test_up_invalid_config(tmp_path, monkeypatch):
+    config_file = tmp_path / "kubeforge.yaml"
+
+    config_file.write_text("""
+cluster:
+  name: test-cluster
+  provider: local
+  workers: -5
+""")
+
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["up"])
+
+    assert result.exit_code == 1
+    assert "Invalid KubeForge configuration" in result.output
+
+def test_down_invalid_config(tmp_path, monkeypatch):
+    config_file = tmp_path / "kubeforge.yaml"
+
+    config_file.write_text("""
+cluster:
+  name: test-cluster
+  provider: local
+  workers: -2
+""")
+
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["down"])
+
+    assert result.exit_code == 1
+    assert "Invalid KubeForge configuration" in result.output
