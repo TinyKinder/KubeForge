@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kubeforge"
+version = "0.1.0"
+description = "Universal Kubernetes cluster management CLI"
+requires-python = ">=3.10"
+
+dependencies = [
+    "typer>=0.29,<1",
+    "PyYAML>=6,<7",
+    "pydantic>=2,<3",
+    "psutil>=6,<9"
+]
+
+[project.scripts]
+kubeforge = "kubeforge.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["kubeforge*"]

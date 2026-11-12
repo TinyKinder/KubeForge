@@ -6,3 +6,7 @@ __pycache__/
 *.tfstate.*
 .terraform/
 .pytest_cache/
+# Python packaging
+*.egg-info/
+build/
+dist/
