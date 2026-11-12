@@ -2,9 +2,9 @@ from kubeforge.providers.local import create_local_cluster
 from kubeforge.providers.local import delete_local_cluster
 from kubeforge.providers.local import get_local_cluster_status
 
-def create_cluster(provider: str, cluster_name: str):
+def create_cluster(provider: str, cluster_name: str, workers: int):
     if provider == "local":
-        create_local_cluster(cluster_name)
+        create_local_cluster(cluster_name, workers)
     else:
         print(f"Provider '{provider}' is not implemented yet")
 

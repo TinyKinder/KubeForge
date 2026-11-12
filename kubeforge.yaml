@@ -1,0 +1,4 @@
+cluster:
+  name: kubeforge
+  provider: local
+  workers: 2

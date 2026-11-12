@@ -1,4 +1,7 @@
 import subprocess
+import yaml
+import tempfile
+from pathlib import Path
 
 def cluster_exists(cluster_name: str) -> bool:
     result = subprocess.run(
@@ -12,7 +15,25 @@ def cluster_exists(cluster_name: str) -> bool:
 
     return cluster_name in clusters
 
-def create_local_cluster(cluster_name: str):
+def generate_kind_config(workers: int):
+    if workers < 0:
+        raise ValueError("Workers cannot be negative")
+
+    config = {
+        "kind": "Cluster",
+        "apiVersion": "kind.x-k8s.io/v1alpha4",
+        "nodes": [
+            {"role": "control-plane"}
+        ]
+    }
+
+    for i in range(workers):
+        config["nodes"].append({"role": "worker"})
+
+    return yaml.safe_dump(config, sort_keys=False)
+
+def create_local_cluster(cluster_name: str, workers: int):
+    print(f"Requested worker nodes: {workers}")
 
     if cluster_exists(cluster_name):
         print(f"Cluster '{cluster_name}' already exists.")
@@ -20,10 +41,23 @@ def create_local_cluster(cluster_name: str):
 
     print(f"Creating cluster '{cluster_name}'...")
 
-    subprocess.run(
-        ["kind", "create", "cluster", "--name", cluster_name, "--wait", "5m"],
-        check=True
-    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config_path = Path(tmp_dir) / "kind-config.yaml"
+
+        config_path.write_text(
+            generate_kind_config(workers),
+            encoding="utf-8"
+        )
+
+        subprocess.run(
+            [
+                "kind", "create", "cluster",
+                "--name", cluster_name,
+                "--config", str(config_path),
+                "--wait", "5m"
+            ],
+            check=True
+        )
 
     print("Cluster created successfully!")
 
