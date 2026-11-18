@@ -1,5 +1,7 @@
+
 import yaml
-from kubeforge.core.models import ClusterConfig
+
+from kubeforge.core.models import ClusterConfig, VPSConfig
 
 
 def load_config():
@@ -10,7 +12,12 @@ def load_config():
         raise ValueError("Missing or invalid 'cluster' section")
 
     cluster = ClusterConfig.model_validate(config["cluster"])
-
     config["cluster"] = cluster.model_dump()
 
+    if "vps" in config:
+        vps = VPSConfig.model_validate(config["vps"])
+        config["vps"] = vps.model_dump()
+
     return config
+
+
