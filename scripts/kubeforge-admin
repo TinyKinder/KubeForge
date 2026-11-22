@@ -122,7 +122,17 @@ case "${1:-}" in
         umask 077
 
         # Prevent simultaneous restore operations
-        exec 9>/run/lock/kubeforge-containerd-restore.lock
+	lock_dir="/run/kubeforge"
+
+	/usr/bin/install -d -m 0700 "$lock_dir"
+
+	if [ -L "$lock_dir" ] ||
+           [ "$(/usr/bin/stat -c %u "$lock_dir")" != "0" ]; then
+            echo "Unsafe lock directory" >&2
+            exit 1
+	fi
+
+	exec 9>"$lock_dir/containerd-restore.lock"
 
         if ! /usr/bin/flock -n 9; then
             echo "Another restore is running" >&2
@@ -149,6 +159,53 @@ case "${1:-}" in
             /usr/bin/rm -f -- "$previous"
             exit 1
         fi
+
+        # Preserve the current configuration ownership and permissions
+        current_owner=$(/usr/bin/stat -c '%u:%g' "$config")
+        candidate_owner=$(/usr/bin/stat -c '%u:%g' "$candidate")
+
+        if [ "$current_owner" != "$candidate_owner" ]; then
+            if ! /usr/bin/chown --reference="$config" "$candidate"; then
+                echo "Failed to preserve configuration ownership" >&2
+                /usr/bin/rm -f -- "$previous"
+                exit 1
+            fi
+        fi
+
+        if ! /usr/bin/chmod --reference="$config" "$candidate"; then
+            echo "Failed to preserve configuration permissions" >&2
+            /usr/bin/rm -f -- "$previous"
+            exit 1
+        fi
+
+        # Create a persistent safety backup before replacing config
+        safety_dir="/var/backups/kubeforge/containerd"
+
+        if [ ! -d "$safety_dir" ] ||
+           [ -L "$safety_dir" ] ||
+           [ "$(/usr/bin/stat -c %u "$safety_dir")" != "0" ]; then
+            echo "Unsafe backup directory" >&2
+            /usr/bin/rm -f -- "$previous"
+            exit 1
+        fi
+
+        if ! safety_backup=$(
+            /usr/bin/mktemp "$safety_dir/config.toml.XXXXXXXX"
+        ); then
+            echo "Failed to create safety backup" >&2
+            /usr/bin/rm -f -- "$previous"
+            exit 1
+        fi
+
+        if ! /usr/bin/cp -- "$previous" "$safety_backup" ||
+           ! /usr/bin/chmod 0600 "$safety_backup" ||
+           ! /usr/bin/cmp -s -- "$previous" "$safety_backup"; then
+            echo "Failed to verify safety backup" >&2
+            /usr/bin/rm -f -- "$safety_backup" "$previous"
+            exit 1
+        fi
+
+        echo "Safety backup: $safety_backup" >&2
 
         # Replace configuration
         if ! /usr/bin/mv -f -- "$candidate" "$config"; then

@@ -56,8 +56,7 @@ exit 0
     replacements = {
         "/etc/containerd": str(config_dir),
         "/var/backups/kubeforge/containerd": str(backup_dir),
-        "/run/lock/kubeforge-containerd-restore.lock":
-            str(lock_dir / "restore.lock"),
+	"/run/kubeforge": str(lock_dir),
         "/usr/bin/containerd": str(fake_containerd),
         "/usr/bin/systemctl": str(fake_systemctl),
         "/usr/bin/stat": str(fake_stat),
@@ -277,3 +276,55 @@ exit 1
     assert result.returncode == 1
     assert "Failed to prepare restore" in result.stderr
     assert config.read_text() == "old configuration\n"
+
+def test_restore_creates_persistent_safety_backup(tmp_path):
+    script, config = prepare_test_environment(tmp_path)
+
+    result = subprocess.run(
+        ["sh", str(script), "containerd-restore"],
+        input="ABC12345\n",
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert config.read_text() == "new configuration\n"
+
+    backups = list(
+        (tmp_path / "backups").glob("config.toml.*")
+    )
+
+    safety_backups = [
+        backup for backup in backups
+        if backup.name != "config.toml.ABC12345"
+    ]
+
+    assert len(safety_backups) == 1
+    assert safety_backups[0].read_text() == "old configuration\n"
+
+
+def test_restore_preserves_config_permissions(tmp_path):
+    import stat
+
+    script, config = prepare_test_environment(tmp_path)
+
+    config.chmod(0o640)
+
+    backup = tmp_path / "backups" / "config.toml.ABC12345"
+    backup.chmod(0o600)
+
+    result = subprocess.run(
+        ["sh", str(script), "containerd-restore"],
+        input="ABC12345\n",
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+
+    permissions = stat.S_IMODE(config.stat().st_mode)
+
+    assert permissions == 0o640
+    assert config.read_text() == "new configuration\n"
