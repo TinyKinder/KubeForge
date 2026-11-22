@@ -5,6 +5,10 @@ from kubeforge.providers.vps import (
     restore_vps_containerd,
     validate_containerd_backup_path,
 )
+from kubeforge.providers.vps_bootstrap import (
+    get_kubernetes_node_state,
+    build_kubeadm_init_command,
+)
 from kubeforge.providers.vps import is_vps_cluster_initialized
 from kubeforge.providers.vps import run_vps_preflight
 from kubeforge.core.manager import create_cluster
@@ -228,6 +232,52 @@ def containerd_restore(
         raise typer.Exit(code=1) from None
 
     typer.secho("Restore completed.", fg=typer.colors.GREEN)
+
+@vps_app.command("init-plan")
+def vps_init_plan(
+    host: str = typer.Option(..., "--host"),
+    user: str = typer.Option(..., "--user"),
+    api_address: str = typer.Option(..., "--api-address"),
+    pod_cidr: str = typer.Option("10.244.0.0/16", "--pod-cidr"),
+    port: int = typer.Option(22, "--port"),
+):
+    try:
+        command = build_kubeadm_init_command(
+            api_address=api_address,
+            pod_cidr=pod_cidr,
+        )
+
+        state = get_kubernetes_node_state(
+            host=host,
+            user=user,
+            port=port,
+        )
+
+    except (
+        ValueError,
+        RuntimeError,
+        OSError,
+        subprocess.CalledProcessError,
+    ) as error:
+        typer.secho(
+            f"Bootstrap planning failed: {error}",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"Node: {user}@{host}")
+    typer.echo(f"Kubernetes state: {state}")
+
+    if state != "FRESH":
+        typer.secho(
+            "Node is already initialized. Bootstrap refused.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo("\nBootstrap command:")
+    typer.echo(command)
+    typer.echo("\nPlan only. No changes were made.")
 
 if __name__ == "__main__":
     app()
