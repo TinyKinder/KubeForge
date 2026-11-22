@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+mode="${1:---check}"
+k8s_version="${2:-v1.37}"
+
+if [[ "$mode" == "--help" ]]; then
+    echo "Usage: kubeforge-vps-prepare [--check|--apply] [v1.35|v1.36|v1.37]"
+    exit 0
+fi
+
+if [[ $# -gt 2 ]]; then
+    echo "Too many arguments" >&2
+    exit 2
+fi
+
+case "$mode" in
+    --check|--apply) ;;
+    *) echo "Invalid operation" >&2; exit 2 ;;
+esac
+
+case "$k8s_version" in
+    v1.35|v1.36|v1.37) ;;
+    *) echo "Unsupported Kubernetes version" >&2; exit 2 ;;
+esac
+
+if [[ ! -f /etc/os-release ]]; then
+    echo "Cannot identify operating system" >&2
+    exit 1
+fi
+
+source /etc/os-release
+
+if [[ "${ID:-}" != "ubuntu" ]]; then
+    echo "Only Ubuntu is supported" >&2
+    exit 1
+fi
+
+case "${VERSION_ID:-}" in
+    22.04|24.04|26.04) ;;
+    *) echo "Unsupported Ubuntu version" >&2; exit 1 ;;
+esac
+
+case "$(uname -m)" in
+    x86_64|aarch64) ;;
+    *) echo "Unsupported architecture" >&2; exit 1 ;;
+esac
+
+if [[ "$(stat -fc %T /sys/fs/cgroup)" != "cgroup2fs" ]]; then
+    echo "This installer requires cgroup v2" >&2
+    exit 1
+fi
+
+if [[ -e /etc/kubernetes/admin.conf ||
+      -e /etc/kubernetes/kubelet.conf ||
+      -d /var/lib/etcd/member ]] ||
+   command -v kubeadm >/dev/null 2>&1 ||
+   command -v containerd >/dev/null 2>&1 ||
+   [[ -e /etc/containerd/config.toml ||
+      -e /etc/apt/sources.list.d/kubernetes.list ]]; then
+    echo "Existing Kubernetes/containerd setup detected. Refusing." >&2
+    exit 1
+fi
+
+echo "Ubuntu: $VERSION_ID"
+echo "Architecture: $(uname -m)"
+echo "Kubernetes: $k8s_version"
+echo "Node state: FRESH"
+
+if [[ "$mode" == "--check" ]]; then
+    echo "PREPARE_CHECK_OK"
+    echo "No changes were made."
+    exit 0
+fi
+
+if [[ "$EUID" -ne 0 ]]; then
+    echo "Apply requires root privileges" >&2
+    exit 1
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+apt-get install -y ca-certificates curl gpg containerd runc
+
+cat > /etc/modules-load.d/kubeforge-k8s.conf <<'EOF'
+overlay
+br_netfilter
+EOF
+
+modprobe overlay
+modprobe br_netfilter
+
+cat > /etc/sysctl.d/99-kubeforge-k8s.conf <<'EOF'
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOF
+
+sysctl --system
+
+install -d -m 0755 /etc/containerd
+
+tmp_config="$(mktemp /etc/containerd/.kubeforge.XXXXXXXX)"
+tmp_key=""
+
+cleanup() {
+    if [[ -n "${tmp_config:-}" ]]; then
+        rm -f -- "$tmp_config"
+    fi
+    if [[ -n "${tmp_key:-}" ]]; then
+        rm -f -- "$tmp_key"
+    fi
+}
+
+trap cleanup EXIT
+
+containerd config default > "$tmp_config"
+
+if ! grep -Eq \
+    '^[[:space:]]*SystemdCgroup[[:space:]]*=[[:space:]]*(true|false)' \
+    "$tmp_config"; then
+    echo "Cannot configure containerd systemd cgroups" >&2
+    exit 1
+fi
+
+sed -i -E \
+    's/^([[:space:]]*SystemdCgroup[[:space:]]*=[[:space:]]*)false/\1true/' \
+    "$tmp_config"
+
+containerd --config "$tmp_config" config dump >/dev/null
+
+install -m 0644 "$tmp_config" /etc/containerd/config.toml
+
+systemctl enable containerd
+systemctl restart containerd
+systemctl is-active --quiet containerd
+
+cp -p /etc/fstab "/etc/fstab.kubeforge.$(date +%Y%m%d%H%M%S).bak"
+
+sed -i -E \
+    '/^[[:space:]]*[^#[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+swap[[:space:]]/s/^/# kubeforge disabled: /' \
+    /etc/fstab
+
+swapoff -a
+
+install -d -m 0755 /etc/apt/keyrings
+
+tmp_key="$(mktemp)"
+
+curl -fsSL \
+    "https://pkgs.k8s.io/core:/stable:/$k8s_version/deb/Release.key" |
+    gpg --batch --yes --dearmor > "$tmp_key"
+
+install -m 0644 \
+    "$tmp_key" \
+    /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+printf '%s\n' \
+    "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/$k8s_version/deb/ /" \
+    > /etc/apt/sources.list.d/kubernetes.list
+
+apt-get update
+apt-get install -y kubelet kubeadm kubectl
+apt-mark hold kubelet kubeadm kubectl
+
+systemctl enable kubelet
+
+if [[ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]]; then
+    echo "IPv4 forwarding verification failed" >&2
+    exit 1
+fi
+
+if [[ -n "$(swapon --noheadings --show)" ]]; then
+    echo "Swap is still active" >&2
+    exit 1
+fi
+
+if ! systemctl is-active --quiet containerd; then
+    echo "Containerd is not active" >&2
+    exit 1
+fi
+
+kubeadm version -o short
+kubelet --version
+
+echo "PREPARE_OK"
+echo "Reboot and verify prerequisites before kubeadm init."
