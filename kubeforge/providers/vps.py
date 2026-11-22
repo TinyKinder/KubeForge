@@ -230,3 +230,38 @@ def verify_vps_containerd_backup(
         raise RuntimeError("Containerd backup verification failed")
 
     return True
+
+def restore_vps_containerd(
+    host: str,
+    user: str,
+    backup_path: str,
+    port: int = 22,
+    *,
+    confirmed: bool = False
+) -> bool:
+    if not confirmed:
+        raise ValueError(
+            "Containerd restore requires explicit confirmation"
+        )
+
+    validated_path = validate_containerd_backup_path(
+        backup_path
+    )
+
+    backup_id = validated_path.rsplit(".", 1)[-1]
+
+    output = run_ssh(
+        host=host,
+        user=user,
+        command=(
+            f"printf '%s\\n' {backup_id} | "
+            "sudo -n /usr/local/sbin/kubeforge-admin "
+            "containerd-restore"
+        ),
+        port=port
+    )
+
+    if output.strip() != "RESTORE_OK":
+        raise RuntimeError("Containerd restore failed")
+
+    return True

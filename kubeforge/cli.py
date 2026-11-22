@@ -1,6 +1,10 @@
 import typer
 import yaml
 import subprocess
+from kubeforge.providers.vps import (
+    restore_vps_containerd,
+    validate_containerd_backup_path,
+)
 from kubeforge.providers.vps import is_vps_cluster_initialized
 from kubeforge.providers.vps import run_vps_preflight
 from kubeforge.core.manager import create_cluster
@@ -11,6 +15,12 @@ from pydantic import ValidationError
 from kubeforge.core.doctor import run_doctor
 
 app = typer.Typer()
+
+vps_app = typer.Typer(help="VPS management")
+containerd_app = typer.Typer(help="Containerd management")
+
+app.add_typer(vps_app, name="vps")
+vps_app.add_typer(containerd_app, name="containerd")
 
 def resolve_cluster_config(provider: str | None, name: str | None):
     try:
@@ -174,6 +184,50 @@ def down(provider: str | None = None, name: str | None = None):
 def doctor():
     if not run_doctor():
         raise typer.Exit(code=1)
+
+@containerd_app.command("restore")
+def containerd_restore(
+    host: str = typer.Option(..., "--host"),
+    user: str = typer.Option(..., "--user"),
+    backup_path: str = typer.Option(..., "--backup-path"),
+    port: int = typer.Option(22, "--port"),
+):
+    try:
+        validate_containerd_backup_path(backup_path)
+    except ValueError as error:
+        typer.secho(str(error), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"Target: {user}@{host}:{port}")
+    typer.echo(f"Backup: {backup_path}")
+
+    if not typer.confirm(
+        "Restore containerd configuration? This may disrupt Kubernetes.",
+        default=False,
+    ):
+        typer.echo("Operation cancelled.")
+        raise typer.Exit()
+
+    try:
+        restore_vps_containerd(
+            host=host,
+            user=user,
+            backup_path=backup_path,
+            port=port,
+            confirmed=True,
+        )
+    except (
+        RuntimeError,
+        ValueError,
+        subprocess.CalledProcessError,
+    ) as error:
+        typer.secho(
+            f"Restore failed: {error}",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1) from None
+
+    typer.secho("Restore completed.", fg=typer.colors.GREEN)
 
 if __name__ == "__main__":
     app()

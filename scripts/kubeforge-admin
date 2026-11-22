@@ -93,8 +93,92 @@ case "${1:-}" in
             exit 2
         fi
 
-        echo "Restore is not implemented yet" >&2
-        exit 3
+        backup="/var/backups/kubeforge/containerd/config.toml.$backup_id"
+
+        if [ ! -f "$backup" ] ||
+           [ -L "$backup" ] ||
+           [ ! -s "$backup" ]; then
+            echo "Invalid backup file" >&2
+            exit 1
+        fi
+
+        if [ "$(/usr/bin/stat -c %u "$backup")" != "0" ]; then
+            echo "Invalid backup owner" >&2
+            exit 1
+        fi
+
+        if ! /usr/bin/containerd --config "$backup" config dump >/dev/null; then
+            echo "Invalid containerd configuration" >&2
+            exit 1
+        fi
+
+        config="/etc/containerd/config.toml"
+
+        if [ ! -f "$config" ] || [ -L "$config" ]; then
+            echo "Invalid current containerd config" >&2
+            exit 1
+        fi
+
+        umask 077
+
+        # Prevent simultaneous restore operations
+        exec 9>/run/lock/kubeforge-containerd-restore.lock
+
+        if ! /usr/bin/flock -n 9; then
+            echo "Another restore is running" >&2
+            exit 1
+        fi
+
+        # Temporary files on the same filesystem as config.toml
+        previous=$(/usr/bin/mktemp /etc/containerd/.kubeforge-prev.XXXXXXXX)
+        candidate=$(/usr/bin/mktemp /etc/containerd/.kubeforge-new.XXXXXXXX)
+
+        trap '/usr/bin/rm -f -- "$candidate"' 0
+
+        # Save the current configuration
+        if ! /usr/bin/cp -p -- "$config" "$previous"; then
+            echo "Failed to save current configuration" >&2
+            /usr/bin/rm -f -- "$previous"
+            exit 1
+        fi
+
+        # Prepare the selected backup
+        if ! /usr/bin/cp -p -- "$backup" "$candidate" ||
+           ! /usr/bin/containerd --config "$candidate" config dump >/dev/null; then
+            echo "Failed to prepare restore" >&2
+            /usr/bin/rm -f -- "$previous"
+            exit 1
+        fi
+
+        # Replace configuration
+        if ! /usr/bin/mv -f -- "$candidate" "$config"; then
+            echo "Failed to replace configuration" >&2
+            /usr/bin/rm -f -- "$previous"
+            exit 1
+        fi
+
+        if /usr/bin/systemctl restart containerd &&
+           /usr/bin/systemctl is-active --quiet containerd; then
+            /usr/bin/rm -f -- "$previous"
+            echo "RESTORE_OK"
+            exit 0
+        fi
+
+        echo "Restore failed. Attempting rollback..." >&2
+
+	if /usr/bin/cp -p -- "$previous" "$candidate" &&
+            /usr/bin/mv -f -- "$candidate" "$config" &&
+            /usr/bin/systemctl restart containerd &&
+            /usr/bin/systemctl is-active --quiet containerd; then
+
+            /usr/bin/rm -f -- "$previous"
+            echo "ROLLBACK_OK" >&2
+            exit 1
+	fi
+
+        echo "CRITICAL: Automatic rollback failed" >&2
+        echo "Previous configuration: $previous" >&2
+        exit 1
         ;;
     *)
         echo "Unsupported operation" >&2

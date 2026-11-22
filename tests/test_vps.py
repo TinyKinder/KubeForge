@@ -1,5 +1,43 @@
 import pytest
+from kubeforge.providers.vps import restore_vps_containerd
 
+
+def test_restore_requires_confirmation():
+    with pytest.raises(ValueError, match="confirmation"):
+        restore_vps_containerd(
+            "192.168.0.104",
+            "kforge",
+            "/var/backups/kubeforge/containerd/config.toml.ABC12345"
+        )
+
+
+def test_restore_uses_admin_command(monkeypatch):
+    captured = {}
+
+    def fake_run_ssh(**kwargs):
+        captured.update(kwargs)
+        return "RESTORE_OK\n"
+
+    monkeypatch.setattr(
+        "kubeforge.providers.vps.run_ssh",
+        fake_run_ssh
+    )
+
+    result = restore_vps_containerd(
+        "192.168.0.104",
+        "kforge",
+        "/var/backups/kubeforge/containerd/config.toml.ABC12345",
+        confirmed=True
+    )
+
+    assert result is True
+    assert captured["host"] == "192.168.0.104"
+    assert captured["user"] == "kforge"
+    assert captured["command"] == (
+        "printf '%s\\n' ABC12345 | "
+        "sudo -n /usr/local/sbin/kubeforge-admin "
+        "containerd-restore"
+    )
 
 @pytest.mark.parametrize(
     "ssh_output, expected",
