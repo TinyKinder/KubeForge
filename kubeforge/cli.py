@@ -9,6 +9,10 @@ from kubeforge.providers.vps_bootstrap import (
     get_kubernetes_node_state,
     build_kubeadm_init_command,
 )
+from kubeforge.providers.vps_prepare import (
+    get_vps_host_facts,
+    build_vps_prepare_plan,
+)
 from kubeforge.providers.vps import is_vps_cluster_initialized
 from kubeforge.providers.vps import run_vps_preflight
 from kubeforge.core.manager import create_cluster
@@ -277,6 +281,52 @@ def vps_init_plan(
 
     typer.echo("\nBootstrap command:")
     typer.echo(command)
+    typer.echo("\nPlan only. No changes were made.")
+
+@vps_app.command("prepare-plan")
+def vps_prepare_plan(
+    host: str = typer.Option(..., "--host"),
+    user: str = typer.Option(..., "--user"),
+    port: int = typer.Option(22, "--port"),
+    kubernetes_version: str = typer.Option(
+        "v1.37", "--kubernetes-version"
+    ),
+):
+    try:
+        facts = get_vps_host_facts(
+            host=host,
+            user=user,
+            port=port,
+        )
+
+        plan = build_vps_prepare_plan(
+            facts,
+            kubernetes_version=kubernetes_version,
+        )
+
+    except (
+        ValueError,
+        RuntimeError,
+        OSError,
+        subprocess.CalledProcessError,
+    ) as error:
+        typer.secho(
+            f"VPS preparation refused: {error}",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"Target: {user}@{host}:{port}")
+    typer.echo(
+        f"Ubuntu: {facts['VERSION_ID']} ({facts['ARCH']})"
+    )
+    typer.echo(f"Swap enabled: {facts['SWAP']}")
+
+    typer.echo("\nPreparation plan:")
+
+    for number, step in enumerate(plan, start=1):
+        typer.echo(f"{number}. {step}")
+
     typer.echo("\nPlan only. No changes were made.")
 
 if __name__ == "__main__":
