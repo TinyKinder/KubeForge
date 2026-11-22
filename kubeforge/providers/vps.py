@@ -1,3 +1,5 @@
+import re
+
 from kubeforge.core.ssh import run_ssh
 
 def get_vps_cluster_status(
@@ -120,3 +122,111 @@ def run_vps_preflight(vps_config: dict) -> dict:
         }
 
     return results
+
+
+def get_vps_containerd_status(
+    host: str,
+    user: str,
+    port: int = 22
+) -> str:
+    output = run_ssh(
+        host=host,
+        user=user,
+        command=(
+            "sudo -n /usr/local/sbin/kubeforge-admin "
+            "containerd-status"
+        ),
+        port=port
+    )
+
+    return output.strip()
+
+def backup_vps_containerd(
+    host: str,
+    user: str,
+    port: int = 22
+) -> str:
+    output = run_ssh(
+        host=host,
+        user=user,
+        command=(
+            "sudo -n /usr/local/sbin/kubeforge-admin "
+            "containerd-backup"
+        ),
+        port=port
+    ).strip()
+
+    prefix = "Backup created: "
+    expected_dir = "/var/backups/kubeforge/containerd/config.toml."
+
+    if not output.startswith(prefix + expected_dir):
+        raise RuntimeError(
+            f"Unexpected containerd backup response: {output}"
+        )
+
+    return validate_containerd_backup_path(
+        output.removeprefix(prefix)
+    )
+
+def prepare_vps_containerd_update(
+    host: str,
+    user: str,
+    port: int = 22
+) -> str:
+    status = get_vps_containerd_status(
+        host=host,
+        user=user,
+        port=port
+    )
+
+    if status != "active":
+        raise RuntimeError(
+            f"containerd is not active on {host}"
+        )
+
+    backup_path = backup_vps_containerd(
+        host=host,
+        user=user,
+        port=port
+    )
+
+    return backup_path
+
+def validate_containerd_backup_path(path: str) -> str:
+    pattern = (
+        r"/var/backups/kubeforge/containerd/"
+        r"config\.toml\.[A-Za-z0-9]{8}"
+    )
+
+    if not re.fullmatch(pattern, path):
+        raise ValueError("Invalid containerd backup path")
+
+    return path
+
+def verify_vps_containerd_backup(
+    host: str,
+    user: str,
+    backup_path: str,
+    port: int = 22
+) -> bool:
+    validated_path = validate_containerd_backup_path(
+        backup_path
+    )
+
+    backup_id = validated_path.rsplit(".", 1)[-1]
+
+    output = run_ssh(
+        host=host,
+        user=user,
+        command=(
+            f"printf '%s\\n' {backup_id} | "
+            "sudo -n /usr/local/sbin/kubeforge-admin "
+            "containerd-verify"
+        ),
+        port=port
+    )
+
+    if output.strip() != "BACKUP_OK":
+        raise RuntimeError("Containerd backup verification failed")
+
+    return True

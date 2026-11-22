@@ -1,0 +1,103 @@
+#!/bin/sh
+
+set -eu
+
+case "${1:-}" in
+    containerd-status)
+        if [ "$#" -ne 1 ]; then
+            exit 2
+        fi
+
+        exec /usr/bin/systemctl is-active containerd
+        ;;
+
+    containerd-backup)
+        if [ "$#" -ne 1 ]; then
+            exit 2
+        fi
+
+        source="/etc/containerd/config.toml"
+        backup_dir="/var/backups/kubeforge/containerd"
+
+        if [ ! -f "$source" ]; then
+            echo "Containerd config not found" >&2
+            exit 1
+        fi
+
+        umask 077
+        /usr/bin/install -d -m 0700 "$backup_dir"
+
+        backup=$(/usr/bin/mktemp "$backup_dir/config.toml.XXXXXXXX")
+
+        if /usr/bin/cp -- "$source" "$backup" &&
+            /usr/bin/chmod 0600 "$backup" &&
+	    [ -s "$backup" ] &&
+	    /usr/bin/cmp -s -- "$source" "$backup"; then
+
+             echo "Backup created: $backup"
+        else
+            /usr/bin/rm -f -- "$backup"
+	    echo "Backup verification failed" >&2
+            exit 1
+        fi
+        ;;
+
+    containerd-verify)
+	if [ "$#" -ne 1 ]; then
+            exit 2
+	fi
+
+	if ! IFS= read -r backup_id; then
+            echo "Missing backup ID" >&2
+    	    exit 2
+	fi
+
+        if ! printf '%s\n' "$backup_id" |
+            /usr/bin/grep -Eq '^[A-Za-z0-9]{8}$'; then
+            echo "Invalid backup ID" >&2
+            exit 2
+        fi
+
+        backup="/var/backups/kubeforge/containerd/config.toml.$backup_id"
+
+        if [ ! -f "$backup" ] ||
+           [ -L "$backup" ] ||
+           [ ! -s "$backup" ]; then
+            echo "Invalid backup file" >&2
+            exit 1
+        fi
+
+        if [ "$(/usr/bin/stat -c %u "$backup")" != "0" ]; then
+            echo "Invalid backup owner" >&2
+            exit 1
+        fi
+
+        /usr/bin/containerd --config "$backup" config dump >/dev/null
+
+        echo "BACKUP_OK"
+        ;;
+
+    containerd-restore)
+        if [ "$#" -ne 1 ]; then
+            exit 2
+        fi
+
+        if ! IFS= read -r backup_id; then
+            echo "Missing backup ID" >&2
+            exit 2
+        fi
+
+        if ! printf '%s\n' "$backup_id" |
+            /usr/bin/grep -Eq '^[A-Za-z0-9]{8}$'; then
+            echo "Invalid backup ID" >&2
+            exit 2
+        fi
+
+        echo "Restore is not implemented yet" >&2
+        exit 3
+        ;;
+    *)
+        echo "Unsupported operation" >&2
+        exit 2
+        ;;
+esac

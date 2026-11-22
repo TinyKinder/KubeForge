@@ -130,3 +130,208 @@ def test_run_vps_preflight(monkeypatch):
     assert results["192.168.0.108"]["role"] == "worker"
     assert results["192.168.0.104"]["errors"] == []
     assert results["192.168.0.108"]["errors"] == []
+
+
+def test_vps_containerd_status(monkeypatch):
+    from kubeforge.providers import vps
+
+    def fake_ssh(host, user, command, port):
+        assert host == "192.168.0.104"
+        assert user == "kforge"
+        assert port == 22
+        assert command == (
+            "sudo -n /usr/local/sbin/kubeforge-admin "
+            "containerd-status"
+        )
+
+        return "active\n"
+
+    monkeypatch.setattr(vps, "run_ssh", fake_ssh)
+
+    result = vps.get_vps_containerd_status(
+        host="192.168.0.104",
+        user="kforge"
+    )
+
+    assert result == "active"
+
+def test_vps_containerd_backup(monkeypatch):
+    from kubeforge.providers import vps
+
+    def fake_ssh(host, user, command, port):
+        assert host == "192.168.0.104"
+        assert user == "kforge"
+        assert port == 22
+        assert command == (
+            "sudo -n /usr/local/sbin/kubeforge-admin "
+            "containerd-backup"
+        )
+
+        return (
+            "Backup created: "
+            "/var/backups/kubeforge/containerd/"
+            "config.toml.ABC12345\n"
+        )
+
+    monkeypatch.setattr(vps, "run_ssh", fake_ssh)
+
+    result = vps.backup_vps_containerd(
+        host="192.168.0.104",
+        user="kforge"
+    )
+
+    assert result == (
+        "/var/backups/kubeforge/containerd/"
+        "config.toml.ABC12345"
+    )
+
+
+def test_vps_containerd_backup_invalid_response(monkeypatch):
+    import pytest
+    from kubeforge.providers import vps
+
+    monkeypatch.setattr(
+        vps,
+        "run_ssh",
+        lambda **kwargs: "Unexpected output\n"
+    )
+
+    with pytest.raises(RuntimeError):
+        vps.backup_vps_containerd(
+            host="192.168.0.104",
+            user="kforge"
+        )
+
+def test_prepare_containerd_update_success(monkeypatch):
+    from kubeforge.providers import vps
+
+    calls = []
+
+    def fake_status(host, user, port):
+        calls.append("status")
+        return "active"
+
+    def fake_backup(host, user, port):
+        calls.append("backup")
+        return "/var/backups/kubeforge/containerd/config.toml.ABC12345"
+
+    monkeypatch.setattr(
+        vps, "get_vps_containerd_status", fake_status
+    )
+    monkeypatch.setattr(
+        vps, "backup_vps_containerd", fake_backup
+    )
+
+    result = vps.prepare_vps_containerd_update(
+        "192.168.0.104", "kforge"
+    )
+
+    assert result.endswith("config.toml.ABC12345")
+    assert calls == ["status", "backup"]
+
+
+def test_prepare_containerd_update_inactive(monkeypatch):
+    import pytest
+    from kubeforge.providers import vps
+
+    monkeypatch.setattr(
+        vps,
+        "get_vps_containerd_status",
+        lambda **kwargs: "inactive"
+    )
+
+    def forbidden_backup(**kwargs):
+        pytest.fail("Backup must not run when containerd is inactive")
+
+    monkeypatch.setattr(
+        vps, "backup_vps_containerd", forbidden_backup
+    )
+
+    with pytest.raises(RuntimeError):
+        vps.prepare_vps_containerd_update(
+            "192.168.0.104", "kforge"
+        )
+
+def test_containerd_backup_path_valid():
+    from kubeforge.providers.vps import (
+        validate_containerd_backup_path
+    )
+
+    path = (
+        "/var/backups/kubeforge/containerd/"
+        "config.toml.ABC12345"
+    )
+
+    assert validate_containerd_backup_path(path) == path
+
+
+def test_containerd_backup_path_invalid():
+    import pytest
+    from kubeforge.providers.vps import (
+        validate_containerd_backup_path
+    )
+
+    with pytest.raises(ValueError):
+        validate_containerd_backup_path(
+            "/var/backups/kubeforge/containerd/"
+            "../../etc/passwd"
+        )
+
+def test_verify_vps_containerd_backup_success(monkeypatch):
+    from kubeforge.providers import vps
+
+    def fake_ssh(host, user, command, port):
+        assert host == "192.168.0.104"
+        assert user == "kforge"
+        assert port == 22
+        assert command == (
+            "printf '%s\\n' ABC12345 | "
+            "sudo -n /usr/local/sbin/kubeforge-admin "
+            "containerd-verify"
+        )
+        return "BACKUP_OK\n"
+
+    monkeypatch.setattr(vps, "run_ssh", fake_ssh)
+
+    result = vps.verify_vps_containerd_backup(
+        "192.168.0.104",
+        "kforge",
+        "/var/backups/kubeforge/containerd/config.toml.ABC12345"
+    )
+
+    assert result is True
+
+
+def test_verify_vps_containerd_backup_invalid_path(monkeypatch):
+    import pytest
+    from kubeforge.providers import vps
+
+    def forbidden_ssh(**kwargs):
+        pytest.fail("SSH must not run for an invalid path")
+
+    monkeypatch.setattr(vps, "run_ssh", forbidden_ssh)
+
+    with pytest.raises(ValueError):
+        vps.verify_vps_containerd_backup(
+            "192.168.0.104",
+            "kforge",
+            "/etc/passwd"
+        )
+
+
+def test_verify_vps_containerd_backup_failure(monkeypatch):
+    import pytest
+    from kubeforge.providers import vps
+
+    monkeypatch.setattr(
+        vps,
+        "run_ssh",
+        lambda **kwargs: "BACKUP_INVALID\n"
+    )
+
+    with pytest.raises(RuntimeError):
+        vps.verify_vps_containerd_backup(
+            "192.168.0.104",
+            "kforge",
+            "/var/backups/kubeforge/containerd/config.toml.ABC12345"
+        )
